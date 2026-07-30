@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Karaoke.Core/Karaoke.Core.csproj" />
+    <Project Path="src/Karaoke.Data/Karaoke.Data.csproj" />
+    <Project Path="src/Karaoke.Desktop/Karaoke.Desktop.csproj" />
+    <Project Path="src/Karaoke.Services/Karaoke.Services.csproj" />
+  </Folder>
+</Solution>

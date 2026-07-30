@@ -1,0 +1,11 @@
+[Oo]bj/
+[Bb]in/
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+*.userprefs
+*.exe
+*.zip
+*.dll
+KaraokePlaza28_Ejecutable/
