@@ -63,26 +63,72 @@ public class LyricsParserService : ILyricsParserService
                 Text = current.Text
             };
 
-            // Generate simple word breakdown for sweep effect
+            // Generate word breakdown for sweep effect, ponderado por sílabas estimadas
+            // en vez de reparto uniforme, para que el barrido siga mejor el ritmo real del canto
             var words = current.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (words.Length > 0)
             {
-                var wordDuration = (endTime - current.Start) / words.Length;
-                for (int w = 0; w < words.Length; w++)
-                {
-                    lyricLine.Words.Add(new LyricWord
-                    {
-                        Text = words[w],
-                        StartTime = current.Start.Add(wordDuration * w),
-                        EndTime = current.Start.Add(wordDuration * (w + 1))
-                    });
-                }
+                lyricLine.Words.AddRange(DistributeWordTimings(words, current.Start, endTime));
             }
 
             lines.Add(lyricLine);
         }
 
         return lines;
+    }
+
+    /// <summary>
+    /// Reparte el tiempo de una línea entre sus palabras ponderando por sílabas estimadas
+    /// en vez de dividir en partes iguales, para que el barrido siga mejor el ritmo del canto
+    /// (palabras largas ocupan proporcionalmente más tiempo que palabras cortas).
+    /// </summary>
+    private static List<LyricWord> DistributeWordTimings(string[] words, TimeSpan start, TimeSpan end)
+    {
+        var result = new List<LyricWord>(words.Length);
+        var totalDuration = end - start;
+        if (totalDuration <= TimeSpan.Zero)
+        {
+            totalDuration = TimeSpan.FromMilliseconds(1);
+        }
+
+        var weights = words.Select(EstimateSyllableWeight).ToArray();
+        double totalWeight = weights.Sum();
+
+        var cursor = start;
+        for (int w = 0; w < words.Length; w++)
+        {
+            var share = weights[w] / totalWeight;
+            var wordDuration = TimeSpan.FromTicks((long)(totalDuration.Ticks * share));
+            var wordEnd = w == words.Length - 1 ? end : cursor.Add(wordDuration);
+
+            result.Add(new LyricWord
+            {
+                Text = words[w],
+                StartTime = cursor,
+                EndTime = wordEnd
+            });
+
+            cursor = wordEnd;
+        }
+
+        return result;
+    }
+
+    private static readonly Regex VowelGroupRegex = new Regex("[aeiouáéíóúüAEIOUÁÉÍÓÚÜ]+", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Estima cuántas sílabas tiene una palabra contando grupos de vocales consecutivas.
+    /// Es una aproximación (no maneja diptongos/hiatos con precisión lingüística), pero es
+    /// mucho más representativa de la duración real al cantar que contar caracteres o repartir
+    /// el tiempo en partes iguales.
+    /// </summary>
+    private static int EstimateSyllableWeight(string word)
+    {
+        var cleaned = Regex.Replace(word, @"[^\p{L}]", "");
+        if (cleaned.Length == 0) return 1;
+
+        int syllables = VowelGroupRegex.Matches(cleaned).Count;
+        return Math.Max(1, syllables);
     }
 
     public List<LyricLine> ParseLrcFile(string filePath)
@@ -365,16 +411,7 @@ public class LyricsParserService : ILyricsParserService
             var words = rawLines[i].Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (words.Length > 0)
             {
-                var wDur = (end - start) / words.Length;
-                for (int w = 0; w < words.Length; w++)
-                {
-                    line.Words.Add(new LyricWord
-                    {
-                        Text = words[w],
-                        StartTime = start.Add(wDur * w),
-                        EndTime = start.Add(wDur * (w + 1))
-                    });
-                }
+                line.Words.AddRange(DistributeWordTimings(words, start, end));
             }
             lines.Add(line);
         }

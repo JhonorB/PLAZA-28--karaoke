@@ -822,36 +822,17 @@ public partial class MainViewModel : ObservableObject
 
     private void OnPositionChanged(object? sender, TimeSpan position)
     {
+        // NOTA: este evento proviene del reloj de software interno de KaraokePlayerService
+        // (un cronómetro que acumula DateTime.UtcNow, no la posición real del audio). Mientras
+        // se reproduce, MainWindow ya llama a SyncPositionFromMediaElement con la posición REAL
+        // del MediaElement en cada tick — esa es la única fuente de verdad para la letra.
+        // Aquí solo reflejamos el reloj/tiempo mostrado para los casos donde este evento se
+        // dispara sin reproducción activa del audio (Stop/LoadSong/Seek), sin tocar la letra
+        // para evitar que dos relojes desincronizados se pisen entre sí y "titile" el resaltado.
         _dispatcher.Invoke(() =>
         {
             CurrentPositionSeconds = position.TotalSeconds;
             TimeDisplay = $"{position:mm\\:ss} / {_playerService.Duration:mm\\:ss}";
-
-            // Compensación de alta precisión (~80ms) para latencia de pantalla a 60 FPS
-            var syncPosition = position.Add(TimeSpan.FromMilliseconds(80));
-
-            var activeLineIndex = _currentLyrics.FindIndex(l => l.IsCurrent(syncPosition));
-            if (activeLineIndex >= 0)
-            {
-                var activeLine = _currentLyrics[activeLineIndex];
-                CurrentLyricText = activeLine.Text;
-                NextLyricText = activeLineIndex + 1 < _currentLyrics.Count ? _currentLyrics[activeLineIndex + 1].Text : "";
-
-                var lineDuration = (activeLine.EndTime - activeLine.StartTime).TotalMilliseconds;
-                if (lineDuration > 0)
-                {
-                    var elapsed = (syncPosition - activeLine.StartTime).TotalMilliseconds;
-                    LyricProgress = Math.Clamp(elapsed / lineDuration, 0.0, 1.0);
-                }
-            }
-            else
-            {
-                var upcoming = _currentLyrics.FirstOrDefault(l => l.StartTime > syncPosition);
-                if (upcoming != null && (upcoming.StartTime - syncPosition).TotalSeconds < 3)
-                {
-                    NextLyricText = upcoming.Text;
-                }
-            }
         });
     }
 
@@ -878,23 +859,52 @@ public partial class MainViewModel : ObservableObject
                 NextLyricText = activeLineIndex + 1 < _currentLyrics.Count ? _currentLyrics[activeLineIndex + 1].Text : "";
             }
 
-            // Algoritmo Palabra por Palabra (Iluminación limpia por palabra completa para máxima sincronización sin cortar letras por la mitad)
+            // Progreso continuo ponderado por caracteres: el relleno visual es un ancho en píxeles
+            // sobre el texto completo (ver KaraokeLyricsControl.UpdateClip), así que la fracción debe
+            // reflejar cuántos caracteres del texto ya "sonaron", no cuántas palabras van, y debe
+            // interpolar suavemente dentro de la palabra actual en vez de saltar en escalones.
             int totalWords = activeLine.Words.Count;
             if (totalWords > 0)
             {
+                int totalChars = Math.Max(1, activeLine.Text.Length);
+                int charsBefore = 0;
                 double exactProgress = 0.0;
+                bool matched = false;
+
                 for (int i = 0; i < totalWords; i++)
                 {
                     var w = activeLine.Words[i];
-                    if (effectivePos >= w.StartTime)
+                    var wordLen = w.Text.Length;
+
+                    if (effectivePos < w.StartTime)
                     {
-                        exactProgress = (double)(i + 1) / totalWords;
-                    }
-                    else
-                    {
+                        exactProgress = (double)charsBefore / totalChars;
+                        matched = true;
                         break;
                     }
+
+                    if (effectivePos < w.EndTime)
+                    {
+                        var wordDurationMs = (w.EndTime - w.StartTime).TotalMilliseconds;
+                        double wordProgress = wordDurationMs > 0
+                            ? (effectivePos - w.StartTime).TotalMilliseconds / wordDurationMs
+                            : 1.0;
+                        wordProgress = Math.Clamp(wordProgress, 0.0, 1.0);
+
+                        exactProgress = (charsBefore + wordProgress * wordLen) / totalChars;
+                        matched = true;
+                        break;
+                    }
+
+                    // separador de un espacio entre palabras, igual que Text.Split(' ')
+                    charsBefore += wordLen + 1;
                 }
+
+                if (!matched)
+                {
+                    exactProgress = 1.0;
+                }
+
                 LyricProgress = Math.Clamp(exactProgress, 0.0, 1.0);
             }
             else
